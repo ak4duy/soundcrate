@@ -16,9 +16,19 @@ pub struct Track {
     pub label: String,
 }
 
+#[derive(Debug, Default)]
+pub struct LibraryStats {
+    pub total_bytes: u64,
+    pub unknown_size_tracks: usize,
+    pub album_count: usize,
+    pub album_tracks: usize,
+    pub formats: BTreeMap<String, usize>,
+}
+
 pub struct Library {
     pub root: PathBuf,
     pub tracks: Vec<Track>,
+    pub stats: LibraryStats,
     albums: Vec<Album>,
 }
 
@@ -98,6 +108,7 @@ impl Library {
             bail!("MUSIC_DIR must be a directory");
         }
         let mut tracks = Vec::new();
+        let mut stats = LibraryStats::default();
         for entry in WalkDir::new(&root).follow_links(false) {
             let entry = entry.context("Cannot read music library entry")?;
             if !entry.file_type().is_file() {
@@ -115,6 +126,11 @@ impl Library {
             ) {
                 continue;
             }
+            match entry.metadata() {
+                Ok(metadata) => stats.total_bytes += metadata.len(),
+                Err(_) => stats.unknown_size_tracks += 1,
+            }
+            *stats.formats.entry(extension).or_default() += 1;
             tracks.push(Track {
                 path: entry.path().to_owned(),
                 label: entry
@@ -151,9 +167,12 @@ impl Library {
             })
             .collect();
         albums.sort_by(|a, b| a.label.cmp(&b.label));
+        stats.album_count = albums.len();
+        stats.album_tracks = albums.iter().map(|album| album.tracks.len()).sum();
         Ok(Self {
             root,
             tracks,
+            stats,
             albums,
         })
     }
@@ -279,6 +298,43 @@ mod tests {
         assert_eq!(lib.resolve("track:1").unwrap().label, "Album/Two.flac");
     }
 
+    #[test]
+    fn stats_sum_indexed_sizes_and_normalize_formats() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir(dir.path().join("Album")).unwrap();
+        for (file, size) in [
+            ("Album/one.MP3", 17),
+            ("two.mp3", 23),
+            ("three.FlAc", 31),
+            ("cover.jpg", 101),
+            ("notes.txt", 103),
+            ("no-extension", 107),
+        ] {
+            fs::write(dir.path().join(file), vec![0; size]).unwrap();
+        }
+        let lib = Library::scan(dir.path()).unwrap();
+        assert_eq!(lib.tracks.len(), 3);
+        assert_eq!(lib.stats.total_bytes, 71);
+        assert_eq!(lib.stats.unknown_size_tracks, 0);
+        assert_eq!(lib.stats.album_count, 0);
+        assert_eq!(lib.stats.album_tracks, 0);
+        assert_eq!(
+            lib.stats.formats,
+            BTreeMap::from([("flac".into(), 1), ("mp3".into(), 2)])
+        );
+    }
+
+    #[test]
+    fn empty_library_has_empty_stats() {
+        let dir = tempfile::tempdir().unwrap();
+        let lib = Library::scan(dir.path()).unwrap();
+        assert_eq!(lib.stats.total_bytes, 0);
+        assert_eq!(lib.stats.unknown_size_tracks, 0);
+        assert_eq!(lib.stats.album_count, 0);
+        assert_eq!(lib.stats.album_tracks, 0);
+        assert!(lib.stats.formats.is_empty());
+    }
+
     fn chunk(id: &[u8; 4], data: &[u8]) -> Vec<u8> {
         let mut bytes = id.to_vec();
         bytes.extend((data.len() as u32).to_le_bytes());
@@ -357,6 +413,25 @@ mod tests {
         fs::write(dir.path().join("corrupt.flac"), b"not audio").unwrap();
         let lib = Library::scan(dir.path()).unwrap();
         (dir, lib)
+    }
+
+    #[test]
+    fn stats_count_constructed_albums_and_their_tracks() {
+        let (_dir, lib) = album_library();
+        assert_eq!(lib.stats.album_count, 4);
+        assert_eq!(lib.stats.album_tracks, 11);
+        assert_eq!(lib.stats.unknown_size_tracks, 0);
+        let expected_bytes: u64 = lib
+            .tracks
+            .iter()
+            .map(|track| fs::metadata(&track.path).unwrap().len())
+            .sum();
+        assert!(expected_bytes > 0);
+        assert_eq!(lib.stats.total_bytes, expected_bytes);
+        assert_eq!(
+            lib.stats.formats,
+            BTreeMap::from([("flac".into(), 1), ("mp3".into(), 1), ("wav".into(), 13)])
+        );
     }
 
     #[test]
@@ -517,14 +592,30 @@ mod tests {
     fn ignores_symlinks_outside_library() {
         let dir = tempfile::tempdir().unwrap();
         let outside = tempfile::tempdir().unwrap();
-        fs::write(outside.path().join("secret.mp3"), []).unwrap();
+        fs::write(outside.path().join("secret.mp3"), [0; 127]).unwrap();
+        fs::write(dir.path().join("local.wav"), [0; 19]).unwrap();
+        std::os::unix::fs::symlink(
+            dir.path().join("local.wav"),
+            dir.path().join("local-link.wav"),
+        )
+        .unwrap();
         std::os::unix::fs::symlink(
             outside.path().join("secret.mp3"),
             dir.path().join("link.mp3"),
         )
         .unwrap();
         std::os::unix::fs::symlink(outside.path(), dir.path().join("linked-dir")).unwrap();
-        assert!(Library::scan(dir.path()).unwrap().tracks.is_empty());
+        std::os::unix::fs::symlink(
+            outside.path().join("missing.mp3"),
+            dir.path().join("broken.mp3"),
+        )
+        .unwrap();
+        let lib = Library::scan(dir.path()).unwrap();
+        assert_eq!(lib.tracks.len(), 1);
+        assert_eq!(lib.tracks[0].label, "local.wav");
+        assert_eq!(lib.stats.total_bytes, 19);
+        assert_eq!(lib.stats.unknown_size_tracks, 0);
+        assert_eq!(lib.stats.formats, BTreeMap::from([("wav".into(), 1)]));
     }
 }
 

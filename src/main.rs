@@ -279,6 +279,53 @@ fn render_queue_page(titles: &[String], requested_page: usize) -> (String, Vec<C
     (lines.join("\n"), vec![buttons])
 }
 
+fn format_size(bytes: u64) -> String {
+    if bytes < 1024 {
+        return format!("{bytes} B");
+    }
+    let mut size = bytes as f64;
+    let mut unit = "B";
+    for next in ["KiB", "MiB", "GiB", "TiB", "PiB", "EiB"] {
+        size /= 1024.0;
+        unit = next;
+        if size < 1024.0 {
+            break;
+        }
+    }
+    format!("{size:.2} {unit}")
+}
+
+fn library_summary(library: &Library) -> String {
+    let stats = &library.stats;
+    let total = library.tracks.len();
+    let formats = stats
+        .formats
+        .iter()
+        .map(|(extension, count)| format!("**{}**: {count}", extension.to_ascii_uppercase()))
+        .collect::<Vec<_>>()
+        .join(" · ");
+    let mut content = format!(
+        "**Music library**\n\n**Total items:** {total} tracks\n**Total size:** {} ({} bytes)\n**Albums:** {}\n**Tracks with album tags:** {} / {total}\n\n**Formats**\n{}",
+        format_size(stats.total_bytes),
+        stats.total_bytes,
+        stats.album_count,
+        stats.album_tracks,
+        if formats.is_empty() {
+            "No indexed audio files."
+        } else {
+            &formats
+        },
+    );
+    if stats.unknown_size_tracks > 0 {
+        content.push_str(&format!(
+            "\n\nSize is incomplete: {} file(s) could not be measured.",
+            stats.unknown_size_tracks
+        ));
+    }
+    content.push_str("\n\n*Restart the bot after changing files or tags.*");
+    content
+}
+
 fn commands() -> Vec<CreateCommand> {
     let mut commands = vec![
         CreateCommand::new("playalbum")
@@ -310,6 +357,10 @@ fn commands() -> Vec<CreateCommand> {
             ),
     ];
     for (name, description) in [
+        (
+            "library",
+            "Show library track counts, albums, file sizes, and formats",
+        ),
         ("pause", "Pause playback"),
         ("resume", "Resume playback"),
         ("skip", "Skip the current track"),
@@ -411,6 +462,8 @@ impl EventHandler for Handler {
                 let result = if let Some(guild) = cmd.guild_id {
                     if cmd.data.name == "queue" {
                         self.queue_page(&ctx, guild, 0).await
+                    } else if cmd.data.name == "library" {
+                        Ok((library_summary(&self.library), vec![]))
                     } else {
                         let query = cmd
                             .data
@@ -578,6 +631,34 @@ async fn shutdown_signal() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sizes_use_binary_units() {
+        for (bytes, expected) in [
+            (0, "0 B"),
+            (1023, "1023 B"),
+            (1024, "1.00 KiB"),
+            (1536, "1.50 KiB"),
+            (1024_u64.pow(2), "1.00 MiB"),
+            (1024_u64.pow(3), "1.00 GiB"),
+            (1024_u64.pow(4), "1.00 TiB"),
+        ] {
+            assert_eq!(format_size(bytes), expected);
+        }
+    }
+
+    #[test]
+    fn library_summary_handles_empty_and_incomplete_statistics() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut library = Library::scan(dir.path()).unwrap();
+        let content = library_summary(&library);
+        assert!(content.contains("**Total items:** 0 tracks"));
+        assert!(content.contains("**Total size:** 0 B (0 bytes)"));
+        assert!(content.contains("No indexed audio files."));
+        assert!(!content.contains("incomplete"));
+        library.stats.unknown_size_tracks = 1;
+        assert!(library_summary(&library).contains("Size is incomplete: 1 file(s)"));
+    }
 
     #[test]
     fn queue_pages_show_ten_tracks_and_correct_buttons() {
