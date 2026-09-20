@@ -264,7 +264,7 @@ fn render_queue_page(titles: &[String], requested_page: usize) -> (String, Vec<C
     }
     let buttons = CreateActionRow::Buttons(vec![
         CreateButton::new(format!("queue:{}", page.saturating_sub(1)))
-            .label("Previous")
+            .label("◄")
             .style(ButtonStyle::Secondary)
             .disabled(page == 0),
         CreateButton::new("queue:page")
@@ -272,7 +272,7 @@ fn render_queue_page(titles: &[String], requested_page: usize) -> (String, Vec<C
             .style(ButtonStyle::Secondary)
             .disabled(true),
         CreateButton::new(format!("queue:{}", page + 1))
-            .label("Next")
+            .label("►")
             .style(ButtonStyle::Secondary)
             .disabled(page + 1 == pages),
     ]);
