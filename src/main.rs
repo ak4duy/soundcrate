@@ -168,7 +168,7 @@ impl Handler {
         let call = manager
             .get(guild)
             .context("I’m not connected to a voice channel.")?;
-        let mut call = call.lock().await;
+        let call = call.lock().await;
         match name {
             "pause" => {
                 call.queue()
