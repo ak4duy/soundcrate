@@ -1,0 +1,26 @@
+services:
+  bot:
+    image: ${SOUNDCRATE_IMAGE:-ghcr.io/ak4duy/soundcrate:latest}
+    restart: unless-stopped
+    init: true
+    environment:
+      DISCORD_TOKEN: ${DISCORD_TOKEN:?Set DISCORD_TOKEN in .env}
+      MUSIC_DIR: /music
+      GUILD_ID: ${GUILD_ID:-}
+      IDLE_TIMEOUT_SECONDS: ${IDLE_TIMEOUT_SECONDS:-300}
+      RUST_LOG: ${RUST_LOG:-soundcrate=info,songbird=warn,serenity=warn}
+    volumes:
+      - type: bind
+        source: ${MUSIC_FOLDER:?Set MUSIC_FOLDER to your host music directory}
+        target: /music
+        read_only: true
+        bind:
+          create_host_path: false
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    stop_grace_period: 20s

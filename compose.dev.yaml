@@ -1,0 +1,6 @@
+# Explicit opt-in: docker compose -f compose.yaml -f compose.dev.yaml up -d --build
+services:
+  bot:
+    image: soundcrate:local
+    build: .
+    pull_policy: build
