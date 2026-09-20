@@ -62,6 +62,29 @@ impl Handler {
         Ok(render_queue_page(&titles, page))
     }
 
+    async fn clear_choices(
+        &self,
+        ctx: &Context,
+        guild: GuildId,
+        query: &str,
+    ) -> Vec<(String, String)> {
+        let Some(manager) = songbird::get(ctx).await else {
+            return vec![];
+        };
+        let session = self.session(guild).await;
+        let session = session.lock().await;
+        let Some(call) = manager.get(guild) else {
+            return vec![];
+        };
+        let call = call.lock().await;
+        let tracks = call.queue().current_queue();
+        queue_choices(
+            tracks.iter().map(|track| track.uuid().to_string()),
+            &session.titles,
+            query,
+        )
+    }
+
     async fn execute(
         &self,
         ctx: &Context,
@@ -170,6 +193,7 @@ impl Handler {
             .context("I’m not connected to a voice channel.")?;
         let call = call.lock().await;
         match name {
+            "clear" => clear_track(call.queue(), &mut session, query),
             "pause" => {
                 call.queue()
                     .current()
@@ -200,6 +224,89 @@ impl Handler {
             _ => bail!("Unknown command."),
         }
     }
+}
+
+fn queue_choices(
+    ids: impl Iterator<Item = String>,
+    titles: &HashMap<String, String>,
+    query: &str,
+) -> Vec<(String, String)> {
+    let query = query.trim().to_lowercase();
+    ids.enumerate()
+        .filter_map(|(index, id)| {
+            let position = (index + 1).to_string();
+            let title = titles
+                .get(&id)
+                .map(String::as_str)
+                .unwrap_or("Unknown track");
+            (position.contains(&query) || title.to_lowercase().contains(&query)).then(|| {
+                (
+                    short(&format!("{position}. {title}"), 100),
+                    format!("queue-track:{id}"),
+                )
+            })
+        })
+        .take(25)
+        .collect()
+}
+
+fn queue_selection(ids: &[String], query: Option<&str>) -> Result<usize> {
+    let query = query
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .context("Choose a queued track or enter a positive queue index from /queue.")?;
+    if ids.is_empty() {
+        bail!("The queue is empty.");
+    }
+    if let Some(id) = query.strip_prefix("queue-track:") {
+        return ids
+            .iter()
+            .position(|candidate| candidate == id)
+            .context("That track is no longer queued. Choose a track again from /clear.");
+    }
+    let position = query
+        .parse::<usize>()
+        .ok()
+        .filter(|&n| n > 0 && query.bytes().all(|b| b.is_ascii_digit()))
+        .context("Enter a positive queue index from /queue or select an autocomplete result.")?;
+    if position > ids.len() {
+        bail!(
+            "Queue index out of range. Choose a track from 1 to {}.",
+            ids.len()
+        );
+    }
+    Ok(position - 1)
+}
+
+fn clear_track(
+    queue: &songbird::tracks::TrackQueue,
+    session: &mut Session,
+    query: Option<&str>,
+) -> Result<String> {
+    queue.modify_queue(|tracks| {
+        let ids: Vec<_> = tracks
+            .iter()
+            .map(|track| track.uuid().to_string())
+            .collect();
+        let index = queue_selection(&ids, query)?;
+        let removed = tracks
+            .remove(index)
+            .expect("selection checked under queue lock");
+        let _ = removed.stop();
+        let title = session
+            .titles
+            .remove(&ids[index])
+            .unwrap_or_else(|| "Unknown track".into());
+        let mut content = format!("Removed **{}** ({}).", short(&title, 150), index + 1);
+        if index == 0
+            && let Some(next) = tracks.front()
+            && let Err(error) = next.play()
+        {
+            warn!(%error, "Could not start next track after /clear");
+            content.push_str(" The next track could not be started; try /skip.");
+        }
+        Ok(content)
+    })
 }
 
 struct PlaybackError {
@@ -303,7 +410,7 @@ fn library_summary(library: &Library) -> String {
         .iter()
         .map(|(extension, count)| format!("**{}**: {count}", extension.to_ascii_uppercase()))
         .collect::<Vec<_>>()
-        .join(" · ");
+        .join(" — ");
     let mut content = format!(
         "**Music library**\n\n**Total items:** {total} tracks\n**Total size:** {} ({} bytes)\n**Albums:** {}\n**Tracks with album tags:** {} / {total}\n\n**Formats**\n{}",
         format_size(stats.total_bytes),
@@ -355,6 +462,18 @@ fn commands() -> Vec<CreateCommand> {
                 .required(true)
                 .set_autocomplete(true),
             ),
+        CreateCommand::new("clear")
+            .description("Clear track by index")
+            .dm_permission(false)
+            .add_option(
+                CreateCommandOption::new(
+                    CommandOptionType::String,
+                    "track",
+                    "Enter your queue index",
+                )
+                .required(true)
+                .set_autocomplete(true),
+            ),
     ];
     for (name, description) in [
         (
@@ -400,6 +519,12 @@ impl EventHandler for Handler {
                     for (id, label) in self.library.search_albums(query, 25) {
                         response =
                             response.add_string_choice(short(&label, 100), format!("album:{id}"));
+                    }
+                } else if cmd.data.name == "clear" {
+                    if let Some(guild) = cmd.guild_id {
+                        for (label, value) in self.clear_choices(&ctx, guild, query).await {
+                            response = response.add_string_choice(label, value);
+                        }
                     }
                 } else {
                     for (id, track) in self.library.search(query, 25) {
@@ -631,6 +756,133 @@ async fn shutdown_signal() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn clear_selection_validates_indices_and_stale_choices() {
+        let ids = vec!["first".into(), "second".into(), "third".into()];
+        assert_eq!(queue_selection(&ids, Some("1")).unwrap(), 0);
+        assert_eq!(queue_selection(&ids, Some(" 3 ")).unwrap(), 2);
+        for query in [
+            None,
+            Some(""),
+            Some(" "),
+            Some("0"),
+            Some("-1"),
+            Some("+1"),
+            Some("1.5"),
+            Some("track:1"),
+            Some("4"),
+            Some("999999999999999999999999999999999999999"),
+            Some("queue-track:"),
+        ] {
+            assert!(queue_selection(&ids, query).is_err(), "{query:?}");
+        }
+        assert!(
+            queue_selection(&[], Some("1"))
+                .unwrap_err()
+                .to_string()
+                .contains("empty")
+        );
+        assert_eq!(
+            queue_selection(&ids[1..], Some("queue-track:second")).unwrap(),
+            0
+        );
+        assert!(
+            queue_selection(&ids[1..], Some("queue-track:first"))
+                .unwrap_err()
+                .to_string()
+                .contains("no longer queued")
+        );
+    }
+
+    #[test]
+    fn clear_autocomplete_searches_queue_positions_and_titles() {
+        let ids: Vec<_> = (1..=30).map(|n| format!("id-{n}")).collect();
+        let mut titles: HashMap<_, _> = ids
+            .iter()
+            .map(|id| (id.clone(), "Same title".into()))
+            .collect();
+        titles.insert(ids[29].clone(), "Unique TITLE".into());
+        let choices = queue_choices(ids.clone().into_iter(), &titles, "");
+        assert_eq!(choices.len(), 25);
+        assert_eq!(
+            choices[0],
+            ("1. Same title".into(), "queue-track:id-1".into())
+        );
+        assert_ne!(choices[0].1, choices[1].1);
+        assert_eq!(
+            queue_choices(ids.clone().into_iter(), &titles, "30"),
+            vec![("30. Unique TITLE".into(), "queue-track:id-30".into())]
+        );
+        assert_eq!(
+            queue_choices(ids.clone().into_iter(), &titles, " unique title ").len(),
+            1
+        );
+        assert!(queue_choices(ids.clone().into_iter(), &titles, "not queued").is_empty());
+        titles.insert(ids[0].clone(), "音".repeat(150));
+        assert!(
+            queue_choices(ids.into_iter(), &titles, "1")[0]
+                .0
+                .chars()
+                .count()
+                <= 100
+        );
+        assert!(queue_choices(std::iter::empty(), &titles, "").is_empty());
+    }
+
+    #[tokio::test]
+    async fn clear_removes_only_selected_uuid_and_preserves_queue_order() {
+        let mut driver = songbird::driver::Driver::default();
+        let queue = driver.queue().clone();
+        let mut session = Session::default();
+        let handles: Vec<_> = (0..4)
+            .map(|_| {
+                let handle = queue.add_with_preload(
+                    songbird::tracks::Track::from(File::new("unused-test-audio.wav")),
+                    &mut driver,
+                    None,
+                );
+                session
+                    .titles
+                    .insert(handle.uuid().to_string(), "Duplicate title".into());
+                handle
+            })
+            .collect();
+        session.titles.insert("unrelated".into(), "Keep me".into());
+        let idle_since = Instant::now();
+        session.idle_since = Some(idle_since);
+        let selected = format!("queue-track:{}", handles[2].uuid());
+        // Simulate advancement after autocomplete, before execution.
+        let _ = queue.dequeue(0).unwrap().stop();
+        assert!(
+            clear_track(&queue, &mut session, Some(&selected))
+                .unwrap()
+                .contains("(2)")
+        );
+        assert_eq!(
+            queue
+                .current_queue()
+                .iter()
+                .map(|h| h.uuid())
+                .collect::<Vec<_>>(),
+            vec![handles[1].uuid(), handles[3].uuid()]
+        );
+        assert!(!session.titles.contains_key(&handles[2].uuid().to_string()));
+        assert_eq!(session.titles.len(), 4);
+        for query in [selected.as_str(), "0", "3", ""] {
+            assert!(clear_track(&queue, &mut session, Some(query)).is_err());
+            assert_eq!(queue.len(), 2);
+            assert_eq!(session.titles.len(), 4);
+        }
+        assert!(clear_track(&queue, &mut session, Some("1")).is_ok());
+        assert_eq!(queue.current().unwrap().uuid(), handles[3].uuid());
+        assert!(clear_track(&queue, &mut session, Some("1")).is_ok());
+        assert!(queue.is_empty());
+        assert!(clear_track(&queue, &mut session, Some("1")).is_err());
+        assert_eq!(session.titles.len(), 2);
+        assert_eq!(session.titles["unrelated"], "Keep me");
+        assert_eq!(session.idle_since, Some(idle_since));
+    }
 
     #[test]
     fn sizes_use_binary_units() {
