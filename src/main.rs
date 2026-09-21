@@ -4,7 +4,10 @@ use std::{
     collections::HashMap,
     env,
     path::Path,
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
     time::{Duration, Instant},
 };
 
@@ -18,6 +21,7 @@ use tracing::{error, info, warn};
 #[derive(Default)]
 struct Session {
     titles: HashMap<String, String>,
+    announcements: HashMap<String, Arc<AtomicBool>>,
     idle_since: Option<Instant>,
 }
 
@@ -157,6 +161,19 @@ impl Handler {
             let position = call.queue().len() + 1;
             for (track, canonical) in prepared {
                 let mut audio = songbird::tracks::Track::from(File::new(canonical));
+                let announced = Arc::new(AtomicBool::new(false));
+                audio.events.add_event(
+                    songbird::events::EventData::new(
+                        songbird::Event::Track(songbird::TrackEvent::Play),
+                        NowPlaying {
+                            http: ctx.http.clone(),
+                            channel,
+                            title: short(&track.label, 150),
+                            announced: announced.clone(),
+                        },
+                    ),
+                    Duration::ZERO,
+                );
                 audio.events.add_event(
                     songbird::events::EventData::new(
                         songbird::Event::Track(songbird::TrackEvent::Error),
@@ -169,9 +186,9 @@ impl Handler {
                     Duration::ZERO,
                 );
                 let handle = call.enqueue(audio).await;
-                session
-                    .titles
-                    .insert(handle.uuid().to_string(), track.label.clone());
+                let id = handle.uuid().to_string();
+                session.titles.insert(id.clone(), track.label.clone());
+                session.announcements.insert(id, announced);
             }
             session.idle_since = None;
             if name == "playalbum" {
@@ -209,15 +226,28 @@ impl Handler {
                 Ok("Resumed.".into())
             }
             "skip" => {
-                if call.queue().is_empty() {
+                let queue = call.queue().current_queue();
+                if queue.is_empty() {
                     bail!("The queue is empty.");
                 }
+                let next = queue.get(1).and_then(|track| {
+                    let id = track.uuid().to_string();
+                    let title = session.titles.get(&id)?.clone();
+                    let announced = session.announcements.get(&id)?.clone();
+                    Some((title, announced))
+                });
                 call.queue().skip()?;
+                if let Some((title, announced)) = next
+                    && !announced.swap(true, Ordering::Relaxed)
+                {
+                    send_now_playing(&ctx.http, channel, &title).await;
+                }
                 Ok("Skipped.".into())
             }
             "stop" => {
                 call.queue().stop();
                 session.titles.clear();
+                session.announcements.clear();
                 session.idle_since = None;
                 Ok("Queue cleared.".into())
             }
@@ -297,6 +327,7 @@ fn clear_track(
             .titles
             .remove(&ids[index])
             .unwrap_or_else(|| "Unknown track".into());
+        session.announcements.remove(&ids[index]);
         let mut content = format!("Removed **{}** ({}).", short(&title, 150), index + 1);
         if index == 0
             && let Some(next) = tracks.front()
@@ -307,6 +338,37 @@ fn clear_track(
         }
         Ok(content)
     })
+}
+
+struct NowPlaying {
+    http: Arc<Http>,
+    channel: ChannelId,
+    title: String,
+    announced: Arc<AtomicBool>,
+}
+
+#[async_trait]
+impl songbird::EventHandler for NowPlaying {
+    async fn act(&self, _ctx: &songbird::EventContext<'_>) -> Option<songbird::Event> {
+        if self.announced.swap(true, Ordering::Relaxed) {
+            return None;
+        }
+        send_now_playing(&self.http, self.channel, &self.title).await;
+        None
+    }
+}
+
+async fn send_now_playing(http: &Http, channel: ChannelId, title: &str) {
+    let message = CreateMessage::new()
+        .embed(
+            CreateEmbed::new()
+                .description(format!("Playing **{}**", short(title, 150)))
+                .color(0x4BFF9A),
+        )
+        .allowed_mentions(CreateAllowedMentions::new());
+    if let Err(error) = channel.send_message(http, message).await {
+        warn!(%error, "Could not send now-playing message");
+    }
 }
 
 struct PlaybackError {
@@ -711,6 +773,9 @@ async fn main() -> Result<()> {
                 let queue = call.queue().current_queue();
                 session
                     .titles
+                    .retain(|id, _| queue.iter().any(|track| track.uuid().to_string() == *id));
+                session
+                    .announcements
                     .retain(|id, _| queue.iter().any(|track| track.uuid().to_string() == *id));
                 if call.current_channel().is_none() || !queue.is_empty() {
                     session.idle_since = None;
