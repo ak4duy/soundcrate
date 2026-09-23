@@ -10,6 +10,7 @@ on:
   workflow_dispatch:
 
 permissions:
+  actions: read
   contents: read
   packages: write
 
@@ -19,6 +20,22 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v6
+
+      # Use the run's start time as the build date so /about can compare
+      # identical timestamps against successful published nightly runs.
+      - name: Collect build metadata
+        id: build_meta
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const { data: run } = await github.rest.actions.getWorkflowRun({
+              ...context.repo,
+              run_id: context.runId,
+            });
+            core.setOutput('branch', context.ref.replace(/^refs\/(heads|tags)\//, ''));
+            core.setOutput('build_date', run.run_started_at);
+            core.setOutput('sha', context.sha);
+            core.setOutput('repository', `${context.repo.owner}/${context.repo.repo}`);
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
@@ -52,5 +69,10 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            BUILD_BRANCH=${{ steps.build_meta.outputs.branch }}
+            BUILD_DATE=${{ steps.build_meta.outputs.build_date }}
+            BUILD_SHA=${{ steps.build_meta.outputs.sha }}
+            BUILD_REPOSITORY=${{ steps.build_meta.outputs.repository }}
           cache-from: type=gha,scope=soundcrate
           cache-to: type=gha,mode=max,scope=soundcrate

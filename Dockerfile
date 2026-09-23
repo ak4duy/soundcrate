@@ -4,9 +4,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends cmake clang lib
 WORKDIR /app
 COPY Cargo.toml Cargo.lock ./
 COPY src ./src
+ARG BUILD_BRANCH=""
+ARG BUILD_DATE=""
+ARG BUILD_SHA=""
+ARG BUILD_REPOSITORY="ak4duy/soundcrate"
 RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,target=/usr/local/cargo/git,sharing=locked \
     --mount=type=cache,target=/app/target,sharing=locked \
+    SOUNDCRATE_BUILD_BRANCH="$BUILD_BRANCH" \
+    SOUNDCRATE_BUILD_DATE="$BUILD_DATE" \
+    SOUNDCRATE_BUILD_SHA="$BUILD_SHA" \
+    SOUNDCRATE_BUILD_REPOSITORY="$BUILD_REPOSITORY" \
     cargo build --locked --release && \
     cp /app/target/release/soundcrate /app/soundcrate
 
