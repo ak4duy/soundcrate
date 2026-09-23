@@ -3232,7 +3232,10 @@ name = "soundcrate"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "chrono",
  "rand 0.9.5",
+ "reqwest",
+ "serde",
  "serenity",
  "songbird",
  "symphonia",

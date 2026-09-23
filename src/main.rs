@@ -1,3 +1,4 @@
+mod about;
 mod library;
 
 use std::{
@@ -29,6 +30,7 @@ struct Handler {
     library: Arc<Library>,
     sessions: Arc<Mutex<HashMap<GuildId, Arc<Mutex<Session>>>>>,
     guild_id: Option<GuildId>,
+    about: about::About,
 }
 
 impl Handler {
@@ -497,6 +499,8 @@ fn library_summary(library: &Library) -> String {
 
 fn commands() -> Vec<CreateCommand> {
     let mut commands = vec![
+        CreateCommand::new("about")
+            .description("Show Soundcrate version, build details, and nightly update status"),
         CreateCommand::new("playalbum")
             .description("Play or queue an album from audio metadata tags")
             .dm_permission(false)
@@ -646,6 +650,33 @@ impl EventHandler for Handler {
                     warn!(%error, "Could not defer command");
                     return;
                 }
+                if cmd.data.name == "about" {
+                    let embed = CreateEmbed::new()
+                        .title("About")
+                        .description(self.about.render().await)
+                        .color(0x4BFF9A);
+                    if let Err(error) = cmd
+                        .edit_response(
+                            &ctx.http,
+                            EditInteractionResponse::new()
+                                .embed(embed)
+                                .components(vec![CreateActionRow::Buttons(vec![
+                                    CreateButton::new_link(self.about.repository_url())
+                                        .label("Source code")
+                                        .emoji(ReactionType::Custom {
+                                            animated: false,
+                                            id: EmojiId::new(1552373350930583634),
+                                            name: Some("gh".into()),
+                                        }),
+                                ])])
+                                .allowed_mentions(CreateAllowedMentions::new()),
+                        )
+                        .await
+                    {
+                        warn!(%error, "About response failed");
+                    }
+                    return;
+                }
                 let result = if let Some(guild) = cmd.guild_id {
                     if cmd.data.name == "queue" {
                         self.queue_page(&ctx, guild, 0).await
@@ -746,6 +777,7 @@ async fn main() -> Result<()> {
         library,
         sessions: sessions.clone(),
         guild_id: guild_id.map(GuildId::new),
+        about: about::About::new()?,
     };
     let intents = GatewayIntents::GUILDS | GatewayIntents::GUILD_VOICE_STATES;
     let manager = songbird::Songbird::serenity();
