@@ -22,7 +22,7 @@ jobs:
         uses: actions/checkout@v6
 
       # Use the run's start time as the build date so /about can compare
-      # identical timestamps against successful published nightly runs.
+      # identical timestamps against successful published runs on either branch.
       - name: Collect build metadata
         id: build_meta
         uses: actions/github-script@v8

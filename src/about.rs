@@ -17,7 +17,7 @@ pub struct About {
     github_token: Option<String>,
     metadata: Metadata,
     started: Instant,
-    nightly: Mutex<NightlyCache>,
+    updates: Mutex<UpdateCache>,
 }
 
 struct Metadata {
@@ -54,14 +54,44 @@ fn parse_date(value: &str) -> Result<DateTime<Utc>> {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum NightlyStatus {
+enum UpdateChannel {
+    Latest,
+    Nightly,
+}
+
+impl UpdateChannel {
+    fn for_branch(branch: Option<&str>) -> Option<Self> {
+        match branch {
+            Some("master") => Some(Self::Latest),
+            Some("nightly") => Some(Self::Nightly),
+            _ => None,
+        }
+    }
+
+    fn branch(self) -> &'static str {
+        match self {
+            Self::Latest => "master",
+            Self::Nightly => "nightly",
+        }
+    }
+
+    fn tag(self) -> &'static str {
+        match self {
+            Self::Latest => "latest",
+            Self::Nightly => "nightly",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum UpdateStatus {
     Available,
     Current,
     Newer,
     Unavailable,
 }
 
-impl NightlyStatus {
+impl UpdateStatus {
     fn compare(build: DateTime<Utc>, latest: DateTime<Utc>) -> Self {
         match latest.cmp(&build) {
             Ordering::Greater => Self::Available,
@@ -70,26 +100,29 @@ impl NightlyStatus {
         }
     }
 
-    fn label(self) -> &'static str {
+    fn label(self, channel: UpdateChannel) -> String {
         match self {
-            Self::Available => "A newer nightly build is available.",
-            Self::Current => "Up to date with the latest published nightly.",
-            Self::Newer => "Running a newer build than the latest published nightly.",
-            Self::Unavailable => "Nightly update check unavailable.",
+            Self::Available => format!("A newer {} build is available.", channel.tag()),
+            Self::Current => format!("Up to date with the published {} build.", channel.tag()),
+            Self::Newer => format!(
+                "Running a newer build than the published {}.",
+                channel.tag()
+            ),
+            Self::Unavailable => format!("{} update check unavailable.", channel.tag()),
         }
     }
 }
 
 #[derive(Default)]
-struct NightlyCache {
-    checked: Option<(Instant, NightlyStatus)>,
+struct UpdateCache {
+    checked: Option<(Instant, UpdateStatus)>,
 }
 
-impl NightlyCache {
-    async fn get_or_fetch<F, Fut>(&mut self, fetch: F) -> NightlyStatus
+impl UpdateCache {
+    async fn get_or_fetch<F, Fut>(&mut self, fetch: F) -> UpdateStatus
     where
         F: FnOnce() -> Fut,
-        Fut: Future<Output = Result<NightlyStatus>>,
+        Fut: Future<Output = Result<UpdateStatus>>,
     {
         if let Some((checked, status)) = self.checked
             && checked.elapsed() < CACHE_TTL
@@ -99,8 +132,8 @@ impl NightlyCache {
         let status = match fetch().await {
             Ok(status) => status,
             Err(error) => {
-                tracing::warn!(error = %format!("{error:#}"), "Nightly update check failed");
-                NightlyStatus::Unavailable
+                tracing::warn!(error = %format!("{error:#}"), "Build update check failed");
+                UpdateStatus::Unavailable
             }
         };
         self.checked = Some((Instant::now(), status));
@@ -126,7 +159,7 @@ impl WorkflowRuns {
             .collect::<Result<Vec<_>>>()?
             .into_iter()
             .max()
-            .context("No successful nightly workflow runs found")
+            .context("No successful Docker workflow runs found")
     }
 }
 
@@ -137,13 +170,13 @@ impl About {
                 .timeout(Duration::from_secs(5))
                 .user_agent(concat!("soundcrate/", env!("CARGO_PKG_VERSION")))
                 .build()
-                .context("Could not create the nightly update HTTP client")?,
+                .context("Could not create the build update HTTP client")?,
             github_token: std::env::var("GITHUB_TOKEN")
                 .ok()
                 .and_then(|token| nonempty(Some(&token)).map(str::to_owned)),
             metadata: Metadata::embedded(),
             started: Instant::now(),
-            nightly: Mutex::new(NightlyCache::default()),
+            updates: Mutex::new(UpdateCache::default()),
         })
     }
 
@@ -152,9 +185,10 @@ impl About {
     }
 
     pub async fn render(&self) -> String {
-        let status = if self.metadata.branch == Some("nightly") {
+        let channel = UpdateChannel::for_branch(self.metadata.branch);
+        let status = if let Some(channel) = channel {
             Some(
-                self.nightly
+                self.updates
                     .lock()
                     .await
                     .get_or_fetch(|| async {
@@ -166,7 +200,7 @@ impl About {
                                 self.metadata.repository
                             ))
                             .query(&[
-                                ("branch", "nightly"),
+                                ("branch", channel.branch()),
                                 ("status", "success"),
                                 ("per_page", "100"),
                             ])
@@ -178,24 +212,28 @@ impl About {
                         let runs = request
                             .send()
                             .await
-                            .context("GitHub nightly workflow request failed")?
+                            .context("GitHub Docker workflow request failed")?
                             .error_for_status()
-                            .context("GitHub nightly workflow request returned an error")?
+                            .context("GitHub Docker workflow request returned an error")?
                             .json::<WorkflowRuns>()
                             .await
-                            .context("Could not decode GitHub nightly workflow runs")?;
-                        Ok(NightlyStatus::compare(build, runs.latest_started()?))
+                            .context("Could not decode GitHub Docker workflow runs")?;
+                        Ok(UpdateStatus::compare(build, runs.latest_started()?))
                     })
                     .await,
             )
         } else {
             None
         };
-        render_details(&self.metadata, self.started.elapsed(), status)
+        render_details(&self.metadata, self.started.elapsed(), channel.zip(status))
     }
 }
 
-fn render_details(metadata: &Metadata, uptime: Duration, status: Option<NightlyStatus>) -> String {
+fn render_details(
+    metadata: &Metadata,
+    uptime: Duration,
+    update: Option<(UpdateChannel, UpdateStatus)>,
+) -> String {
     let date = metadata
         .build_date()
         .map(|date| date.format("%Y-%m-%d %H:%M:%S UTC").to_string())
@@ -210,19 +248,18 @@ fn render_details(metadata: &Metadata, uptime: Duration, status: Option<NightlyS
          Branch/ref: **{}**\n\
          Build date: **{date}**\n\
          Commit: **{sha}**\n\
-         Uptime: **{}d {}h {}m {}s**\n\n\
-         *{}.*",
+         Uptime: **{}d {}h {}m {}s**",
         env!("CARGO_PKG_VERSION"),
         metadata.branch.unwrap_or("Unknown"),
         seconds / 86_400,
         seconds / 3_600 % 24,
         seconds / 60 % 60,
         seconds % 60,
-        env!("CARGO_PKG_DESCRIPTION"),
     );
-    if let Some(status) = status {
+    if let Some((channel, status)) = update {
         text.push('\n');
-        text.push_str(status.label());
+        text.push_str(&status.label(channel));
     }
+    text.push_str(&format!("\n\n*{}.*", env!("CARGO_PKG_DESCRIPTION")));
     text
 }

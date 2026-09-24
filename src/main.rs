@@ -500,7 +500,7 @@ fn library_summary(library: &Library) -> String {
 fn commands() -> Vec<CreateCommand> {
     let mut commands = vec![
         CreateCommand::new("about")
-            .description("Show Soundcrate version, build details, and nightly update status"),
+            .description("Show Soundcrate version, build details, and update status"),
         CreateCommand::new("playalbum")
             .description("Play or queue an album from audio metadata tags")
             .dm_permission(false)
