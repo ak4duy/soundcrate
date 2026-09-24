@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 use rand::seq::IndexedRandom;
+use serenity::all::{CreateAllowedMentions, CreateEmbed, EditInteractionResponse};
 use symphonia::core::{
     io::MediaSourceStream,
     meta::{MetadataRevision, StandardTagKey, Value},
@@ -292,7 +293,19 @@ fn format_size(bytes: u64) -> String {
     format!("{size:.2} {unit}")
 }
 
-pub(super) fn library_summary(library: &Library) -> String {
+pub(super) fn response(library: &Library) -> EditInteractionResponse {
+    let embed = CreateEmbed::new()
+        .title("Library")
+        .description(library_summary(library))
+        .color(0x4BFF9A);
+    EditInteractionResponse::new()
+        .content("")
+        .embed(embed)
+        .components(vec![])
+        .allowed_mentions(CreateAllowedMentions::new())
+}
+
+fn library_summary(library: &Library) -> String {
     let stats = &library.stats;
     let total = library.tracks.len();
     let formats = stats
@@ -302,7 +315,7 @@ pub(super) fn library_summary(library: &Library) -> String {
         .collect::<Vec<_>>()
         .join(" — ");
     let mut content = format!(
-        "**Music library**\n\n**Total items:** {total} tracks\n**Total size:** {} ({} bytes)\n**Albums:** {}\n**Tracks with album tags:** {} / {total}\n\n**Formats**\n{}",
+        "**Total items:** {total} tracks\n**Total size:** {} ({} bytes)\n**Albums:** {}\n**Tracks with album tags:** {} / {total}\n\n**Formats**\n{}",
         format_size(stats.total_bytes),
         stats.total_bytes,
         stats.album_count,

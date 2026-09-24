@@ -124,9 +124,6 @@ pub(super) async fn execute(
     if name == "queue" {
         return queue_page(handler, ctx, guild, 0).await;
     }
-    if name == "library" {
-        return Ok((library::library_summary(&handler.library), vec![]));
-    }
     let query = cmd
         .data
         .options
@@ -182,10 +179,14 @@ pub(super) async fn respond(handler: &Handler, ctx: &Context, cmd: &CommandInter
         tracing::warn!(%error, "Could not defer command");
         return;
     }
-    if cmd.data.name == "about" {
-        let response = about::response(&handler.about).await;
+    let response = match cmd.data.name.as_str() {
+        "about" => Some(about::response(&handler.about).await),
+        "library" if cmd.guild_id.is_some() => Some(library::response(&handler.library)),
+        _ => None,
+    };
+    if let Some(response) = response {
         if let Err(error) = cmd.edit_response(&ctx.http, response).await {
-            tracing::warn!(%error, "About response failed");
+            tracing::warn!(%error, command = %cmd.data.name, "Command response failed");
         }
         return;
     }
