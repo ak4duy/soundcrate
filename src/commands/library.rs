@@ -275,3 +275,50 @@ impl Library {
         }
     }
 }
+
+fn format_size(bytes: u64) -> String {
+    if bytes < 1024 {
+        return format!("{bytes} B");
+    }
+    let mut size = bytes as f64;
+    let mut unit = "B";
+    for next in ["KiB", "MiB", "GiB", "TiB", "PiB", "EiB"] {
+        size /= 1024.0;
+        unit = next;
+        if size < 1024.0 {
+            break;
+        }
+    }
+    format!("{size:.2} {unit}")
+}
+
+pub(super) fn library_summary(library: &Library) -> String {
+    let stats = &library.stats;
+    let total = library.tracks.len();
+    let formats = stats
+        .formats
+        .iter()
+        .map(|(extension, count)| format!("**{}**: {count}", extension.to_ascii_uppercase()))
+        .collect::<Vec<_>>()
+        .join(" — ");
+    let mut content = format!(
+        "**Music library**\n\n**Total items:** {total} tracks\n**Total size:** {} ({} bytes)\n**Albums:** {}\n**Tracks with album tags:** {} / {total}\n\n**Formats**\n{}",
+        format_size(stats.total_bytes),
+        stats.total_bytes,
+        stats.album_count,
+        stats.album_tracks,
+        if formats.is_empty() {
+            "No indexed audio files."
+        } else {
+            &formats
+        },
+    );
+    if stats.unknown_size_tracks > 0 {
+        content.push_str(&format!(
+            "\n\nSize is incomplete: {} file(s) could not be measured.",
+            stats.unknown_size_tracks
+        ));
+    }
+    content.push_str("\n\n*Restart the bot after changing files or tags.*");
+    content
+}

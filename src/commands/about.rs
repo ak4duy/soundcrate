@@ -7,6 +7,7 @@ use std::{
 use anyhow::{Context as _, Result};
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
+use serenity::all::*;
 use tokio::sync::Mutex;
 
 const CACHE_TTL: Duration = Duration::from_secs(5 * 60);
@@ -262,4 +263,23 @@ fn render_details(
     }
     text.push_str(&format!("\n\n*{}.*", env!("CARGO_PKG_DESCRIPTION")));
     text
+}
+
+pub(super) async fn response(about: &About) -> EditInteractionResponse {
+    let embed = CreateEmbed::new()
+        .title("About")
+        .description(about.render().await)
+        .color(0x4BFF9A);
+    EditInteractionResponse::new()
+        .embed(embed)
+        .components(vec![CreateActionRow::Buttons(vec![
+            CreateButton::new_link(about.repository_url())
+                .label("Source code")
+                .emoji(ReactionType::Custom {
+                    animated: false,
+                    id: EmojiId::new(1552373350930583634),
+                    name: Some("gh".into()),
+                }),
+        ])])
+        .allowed_mentions(CreateAllowedMentions::new())
 }
