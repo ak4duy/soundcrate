@@ -44,6 +44,17 @@ pub(super) fn definitions() -> Vec<CreateCommand> {
                 .required(true)
                 .set_autocomplete(true),
             ),
+        CreateCommand::new("playurl")
+            .description("Play or queue audio from a direct HTTP(S) URL")
+            .dm_permission(false)
+            .add_option(
+                CreateCommandOption::new(
+                    CommandOptionType::String,
+                    "url",
+                    "Direct link to an audio file or stream",
+                )
+                .required(true),
+            ),
         CreateCommand::new("clear")
             .description("Clear track by index")
             .dm_permission(false)
@@ -141,7 +152,7 @@ pub(super) async fn execute(
             bail!("Join my voice channel to control playback.");
         }
     }
-    let content = if matches!(name, "play" | "playalbum" | "playrandom") {
+    let content = if matches!(name, "play" | "playalbum" | "playrandom" | "playurl") {
         play::execute(
             handler,
             ctx,

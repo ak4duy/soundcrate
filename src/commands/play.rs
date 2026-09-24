@@ -8,7 +8,7 @@ use std::{
 
 use anyhow::{Context as _, Result, bail};
 use serenity::{all::*, async_trait};
-use songbird::input::File;
+use songbird::input::{File, HttpRequest, Input};
 use tracing::{error, warn};
 
 use crate::{Handler, Session};
@@ -32,26 +32,48 @@ pub(super) async fn execute(
         .iter()
         .find(|option| option.name == "track" || option.name == "album")
         .and_then(|option| option.value.as_str());
-    let (label, tracks) = match name {
-        "playalbum" => handler
-            .library
-            .resolve_album(query.context("Choose an album.")?)?,
-        "playrandom" => {
-            let track = handler.library.random_track()?;
-            (track.label.clone(), vec![track])
-        }
-        _ => {
-            let track = handler.library.resolve(query.context("Choose a track.")?)?;
-            (track.label.clone(), vec![track])
+    let url = (name == "playurl")
+        .then(|| {
+            cmd.data
+                .options
+                .iter()
+                .find(|option| option.name == "url")
+                .and_then(|option| option.value.as_str())
+                .context("Enter a direct audio URL.")
+                .and_then(parse_audio_url)
+        })
+        .transpose()?;
+    let (label, tracks) = if let Some(url) = &url {
+        (url_label(url), vec![])
+    } else {
+        match name {
+            "playalbum" => handler
+                .library
+                .resolve_album(query.context("Choose an album.")?)?,
+            "playrandom" => {
+                let track = handler.library.random_track()?;
+                (track.label.clone(), vec![track])
+            }
+            _ => {
+                let track = handler.library.resolve(query.context("Choose a track.")?)?;
+                (track.label.clone(), vec![track])
+            }
         }
     };
+    let count = if url.is_some() { 1 } else { tracks.len() };
     let queued = if let Some(call) = manager.get(guild) {
         call.lock().await.queue().len()
     } else {
         0
     };
-    check_queue_capacity(queued, tracks.len())?;
-    let mut prepared = Vec::with_capacity(tracks.len());
+    check_queue_capacity(queued, count)?;
+    let mut prepared: Vec<(String, Input)> = Vec::with_capacity(count);
+    if let Some(url) = url {
+        prepared.push((
+            label.clone(),
+            HttpRequest::new(reqwest::Client::new(), url.into()).into(),
+        ));
+    }
     for track in tracks {
         let canonical = tokio::fs::canonicalize(&track.path)
             .await
@@ -62,7 +84,7 @@ pub(super) async fn execute(
         tokio::fs::File::open(&canonical)
             .await
             .with_context(|| format!("Cannot read track: {}", track.label))?;
-        prepared.push((track, canonical));
+        prepared.push((track.label.clone(), File::new(canonical).into()));
     }
     let call = manager
         .join(guild, user_channel)
@@ -70,11 +92,10 @@ pub(super) async fn execute(
         .context("Could not join voice; check Connect and Speak permissions.")?;
     let mut call = call.lock().await;
     call.deafen(true).await?;
-    let count = prepared.len();
     check_queue_capacity(call.queue().len(), count)?;
     let position = call.queue().len() + 1;
-    for (track, canonical) in prepared {
-        let mut audio = songbird::tracks::Track::from(File::new(canonical));
+    for (title, input) in prepared {
+        let mut audio = songbird::tracks::Track::from(input);
         let announced = Arc::new(AtomicBool::new(false));
         audio.events.add_event(
             songbird::events::EventData::new(
@@ -82,7 +103,7 @@ pub(super) async fn execute(
                 NowPlaying {
                     http: ctx.http.clone(),
                     channel,
-                    title: short(&track.label, 150),
+                    title: short(&title, 150),
                     announced: announced.clone(),
                 },
             ),
@@ -94,14 +115,14 @@ pub(super) async fn execute(
                 PlaybackError {
                     http: ctx.http.clone(),
                     channel,
-                    title: short(&track.label, 150),
+                    title: short(&title, 150),
                 },
             ),
             Duration::ZERO,
         );
         let handle = call.enqueue(audio).await;
         let id = handle.uuid().to_string();
-        session.titles.insert(id.clone(), track.label.clone());
+        session.titles.insert(id.clone(), title);
         session.announcements.insert(id, announced);
     }
     session.idle_since = None;
@@ -118,6 +139,26 @@ pub(super) async fn execute(
         short(&label, 150),
         position,
     ))
+}
+
+fn parse_audio_url(value: &str) -> Result<reqwest::Url> {
+    let url = reqwest::Url::parse(value.trim()).context("Enter a valid HTTP(S) audio URL.")?;
+    if !matches!(url.scheme(), "http" | "https") || url.host_str().is_none() {
+        bail!("Only direct HTTP(S) audio URLs are supported.");
+    }
+    Ok(url)
+}
+
+fn url_label(url: &reqwest::Url) -> String {
+    let host = url.host_str().unwrap_or("Audio URL");
+    let filename = url
+        .path_segments()
+        .and_then(|mut parts| parts.next_back())
+        .filter(|part| !part.is_empty());
+    match filename {
+        Some(filename) => format!("{host} / {filename}"),
+        None => host.into(),
+    }
 }
 
 fn check_queue_capacity(queued: usize, added: usize) -> Result<()> {
@@ -171,7 +212,7 @@ impl songbird::EventHandler for PlaybackError {
         error!(?ctx, "Audio playback failed");
         let message = CreateMessage::new()
             .content(format!(
-                "Could not play **{}**. Check that the file is valid and uses a supported codec.",
+                "Could not play **{}**. Check that the audio URL or file is accessible and uses a supported codec.",
                 self.title
             ))
             .allowed_mentions(CreateAllowedMentions::new());
