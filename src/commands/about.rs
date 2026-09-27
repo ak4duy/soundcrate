@@ -11,6 +11,7 @@ use serenity::all::*;
 use tokio::sync::Mutex;
 
 const CACHE_TTL: Duration = Duration::from_secs(5 * 60);
+const FAILURE_CACHE_TTL: Duration = Duration::from_secs(60);
 const DEFAULT_REPOSITORY: &str = "ak4duy/soundcrate";
 
 pub struct About {
@@ -126,7 +127,12 @@ impl UpdateCache {
         Fut: Future<Output = Result<UpdateStatus>>,
     {
         if let Some((checked, status)) = self.checked
-            && checked.elapsed() < CACHE_TTL
+            && checked.elapsed()
+                < if status == UpdateStatus::Unavailable {
+                    FAILURE_CACHE_TTL
+                } else {
+                    CACHE_TTL
+                }
         {
             return status;
         }
@@ -168,7 +174,8 @@ impl About {
     pub fn new() -> Result<Self> {
         Ok(Self {
             client: reqwest::Client::builder()
-                .timeout(Duration::from_secs(5))
+                .connect_timeout(Duration::from_secs(5))
+                .timeout(Duration::from_secs(15))
                 .user_agent(concat!("soundcrate/", env!("CARGO_PKG_VERSION")))
                 .build()
                 .context("Could not create the build update HTTP client")?,
@@ -179,6 +186,46 @@ impl About {
             started: Instant::now(),
             updates: Mutex::new(UpdateCache::default()),
         })
+    }
+
+    async fn request_runs(&self, channel: UpdateChannel) -> Result<WorkflowRuns, reqwest::Error> {
+        let mut request = self
+            .client
+            .get(format!(
+                "https://api.github.com/repos/{}/actions/workflows/docker.yml/runs",
+                self.metadata.repository,
+            ))
+            .query(&[
+                ("branch", channel.branch()),
+                ("status", "success"),
+                ("per_page", "10"),
+            ])
+            .header(reqwest::header::ACCEPT, "application/vnd.github+json")
+            .header("X-GitHub-Api-Version", "2022-11-28");
+        if let Some(token) = &self.github_token {
+            request = request.bearer_auth(token);
+        }
+        request.send().await?.error_for_status()?.json().await
+    }
+
+    async fn fetch_runs(&self, channel: UpdateChannel) -> Result<WorkflowRuns> {
+        match self.request_runs(channel).await {
+            Ok(runs) => Ok(runs),
+            Err(error)
+                if error.is_timeout()
+                    || error.is_connect()
+                    || error
+                        .status()
+                        .is_some_and(|status| status.is_server_error()) =>
+            {
+                tracing::debug!(%error, "Retrying transient GitHub update check failure");
+                tokio::time::sleep(Duration::from_secs(1)).await;
+                self.request_runs(channel)
+                    .await
+                    .context("GitHub Docker workflow request failed after retry")
+            }
+            Err(error) => Err(error).context("GitHub Docker workflow request failed"),
+        }
     }
 
     pub fn repository_url(&self) -> String {
@@ -194,31 +241,7 @@ impl About {
                     .await
                     .get_or_fetch(|| async {
                         let build = self.metadata.build_date()?;
-                        let mut request = self
-                            .client
-                            .get(format!(
-                                "https://api.github.com/repos/{}/actions/workflows/docker.yml/runs",
-                                self.metadata.repository
-                            ))
-                            .query(&[
-                                ("branch", channel.branch()),
-                                ("status", "success"),
-                                ("per_page", "100"),
-                            ])
-                            .header(reqwest::header::ACCEPT, "application/vnd.github+json")
-                            .header("X-GitHub-Api-Version", "2022-11-28");
-                        if let Some(token) = &self.github_token {
-                            request = request.bearer_auth(token);
-                        }
-                        let runs = request
-                            .send()
-                            .await
-                            .context("GitHub Docker workflow request failed")?
-                            .error_for_status()
-                            .context("GitHub Docker workflow request returned an error")?
-                            .json::<WorkflowRuns>()
-                            .await
-                            .context("Could not decode GitHub Docker workflow runs")?;
+                        let runs = self.fetch_runs(channel).await?;
                         Ok(UpdateStatus::compare(build, runs.latest_started()?))
                     })
                     .await,
