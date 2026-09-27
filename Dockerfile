@@ -16,11 +16,13 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
     SOUNDCRATE_BUILD_SHA="$BUILD_SHA" \
     SOUNDCRATE_BUILD_REPOSITORY="$BUILD_REPOSITORY" \
     cargo build --locked --release && \
-    cp /app/target/release/soundcrate /app/soundcrate
+    cp /app/target/release/soundcrate /app/soundcrate && \
+    cp -L /usr/lib/*-linux-gnu/libopus.so.0 /app/libopus.so.0
 
-FROM debian:bookworm-slim
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates libopus0 && rm -rf /var/lib/apt/lists/*
+# Match the builder's glibc version; cc includes native runtime libraries and CA certificates.
+FROM gcr.io/distroless/cc-debian12:nonroot
+COPY --from=builder /app/libopus.so.0 /usr/lib/libopus.so.0
 COPY --from=builder /app/soundcrate /usr/local/bin/soundcrate
 USER 10001:10001
 ENV MUSIC_DIR=/music
-ENTRYPOINT ["soundcrate"]
+ENTRYPOINT ["/usr/local/bin/soundcrate"]
