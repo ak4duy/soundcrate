@@ -27,11 +27,12 @@ The app image is published to `ghcr.io/ak4duy/soundcrate`:
 | `/playurl url`     | Play or queue audio from a direct HTTP(S) URL                                               |
 | `/playalbum album` | Search tagged albums and queue all their tracks in disc/track order                         |
 | `/playrandom`      | Play or queue one random library track                                                      |
+| `/autoplay on/off` | Enable or disable random library playback when the queue runs out                           |
 | `/library`         | Show indexed track and album counts, total audio size, album-tag coverage, and file formats |
 | `/queue`           | Browse the current queue                                                                    |
 | `/pause`           | Pause the current track                                                                     |
 | `/resume`          | Resume playback                                                                             |
-| `/resume`          | Shuffle tracks                                                                              |
+| `/shufflee`        | Shuffle tracks                                                                              |
 | `/skip`            | Skip the current track                                                                      |
 | `/clear track`     | Remove one queued track by its `/queue` index or autocomplete selection                     |
 | `/stop`            | Clear the queue and disconnect                                                              |
