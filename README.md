@@ -31,6 +31,7 @@ The app image is published to `ghcr.io/ak4duy/soundcrate`:
 | `/queue`           | Browse the current queue                                                                    |
 | `/pause`           | Pause the current track                                                                     |
 | `/resume`          | Resume playback                                                                             |
+| `/resume`          | Shuffle tracks                                                                              |
 | `/skip`            | Skip the current track                                                                      |
 | `/clear track`     | Remove one queued track by its `/queue` index or autocomplete selection                     |
 | `/stop`            | Clear the queue and disconnect                                                              |
