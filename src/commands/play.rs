@@ -14,7 +14,7 @@ use tracing::{error, warn};
 
 use crate::{Handler, Session};
 
-use super::{short, shuffle::shuffle_upcoming};
+use super::{Library, library::Track, short, shuffle::shuffle_upcoming};
 
 pub(super) async fn execute(
     handler: &Handler,
@@ -27,6 +27,42 @@ pub(super) async fn execute(
 ) -> Result<String> {
     let channel = cmd.channel_id;
     let name = cmd.data.name.as_str();
+    if name == "autoplay" {
+        let mode = cmd
+            .data
+            .options
+            .iter()
+            .find(|option| option.name == "mode")
+            .and_then(|option| option.value.as_str());
+        match mode {
+            Some("off") => {
+                session.autoplay_channel = None;
+                return Ok(
+                    "Autoplay is off. Current playback and queued tracks are unchanged.".into(),
+                );
+            }
+            Some("on") => {
+                handler.library.random_track()?;
+                let call = manager
+                    .join(guild, user_channel)
+                    .await
+                    .context("Could not join voice; check Connect and Speak permissions.")?;
+                let mut call = call.lock().await;
+                call.deafen(true).await?;
+                if call.queue().is_empty() {
+                    enqueue_random(&handler.library, &mut call, session, &ctx.http, channel)
+                        .await?;
+                }
+                session.autoplay_channel = Some(channel);
+                session.idle_since = None;
+                return Ok(
+                    "Autoplay is on. Random library tracks will play when the queue runs out."
+                        .into(),
+                );
+            }
+            _ => bail!("Choose autoplay on or off."),
+        }
+    }
     let query = cmd
         .data
         .options
@@ -76,16 +112,8 @@ pub(super) async fn execute(
         ));
     }
     for track in tracks {
-        let canonical = tokio::fs::canonicalize(&track.path)
-            .await
-            .with_context(|| format!("File is no longer available: {}", track.label))?;
-        if !canonical.starts_with(&handler.library.root) {
-            bail!("Track is outside the music directory.");
-        }
-        tokio::fs::File::open(&canonical)
-            .await
-            .with_context(|| format!("Cannot read track: {}", track.label))?;
-        prepared.push((track.label.clone(), File::new(canonical).into()));
+        let input = local_input(&handler.library, &track).await?;
+        prepared.push((track.label, input));
     }
     let call = manager
         .join(guild, user_channel)
@@ -102,35 +130,7 @@ pub(super) async fn execute(
     }
 
     for (title, input) in prepared {
-        let mut audio = songbird::tracks::Track::from(input);
-        let announced = Arc::new(AtomicBool::new(false));
-        audio.events.add_event(
-            songbird::events::EventData::new(
-                songbird::Event::Track(songbird::TrackEvent::Play),
-                NowPlaying {
-                    http: ctx.http.clone(),
-                    channel,
-                    title: short(&title, 150),
-                    announced: announced.clone(),
-                },
-            ),
-            Duration::ZERO,
-        );
-        audio.events.add_event(
-            songbird::events::EventData::new(
-                songbird::Event::Track(songbird::TrackEvent::Error),
-                PlaybackError {
-                    http: ctx.http.clone(),
-                    channel,
-                    title: short(&title, 150),
-                },
-            ),
-            Duration::ZERO,
-        );
-        let handle = call.enqueue(audio).await;
-        let id = handle.uuid().to_string();
-        session.titles.insert(id.clone(), title);
-        session.announcements.insert(id, announced);
+        enqueue(&mut call, session, &ctx.http, channel, title, input).await;
     }
     if session.shuffle_all && !queue_empty {
         shuffle_upcoming(call.queue());
@@ -149,6 +149,87 @@ pub(super) async fn execute(
         short(&label, 150),
         position,
     ))
+}
+
+async fn local_input(library: &Library, track: &Track) -> Result<Input> {
+    let canonical = tokio::fs::canonicalize(&track.path)
+        .await
+        .with_context(|| format!("File is no longer available: {}", track.label))?;
+    if !canonical.starts_with(&library.root) {
+        bail!("Track is outside the music directory.");
+    }
+    tokio::fs::File::open(&canonical)
+        .await
+        .with_context(|| format!("Cannot read track: {}", track.label))?;
+    Ok(File::new(canonical).into())
+}
+
+pub(crate) async fn autoplay_next(
+    library: &Library,
+    call: &mut songbird::Call,
+    session: &mut Session,
+    http: &Arc<Http>,
+) -> Result<()> {
+    if let Some(channel) = session.autoplay_channel
+        && call.current_channel().is_some()
+        && call.queue().is_empty()
+    {
+        enqueue_random(library, call, session, http, channel).await?;
+        session.idle_since = None;
+    }
+    Ok(())
+}
+
+async fn enqueue_random(
+    library: &Library,
+    call: &mut songbird::Call,
+    session: &mut Session,
+    http: &Arc<Http>,
+    channel: ChannelId,
+) -> Result<()> {
+    let track = library.random_track()?;
+    let input = local_input(library, &track).await?;
+    enqueue(call, session, http, channel, track.label, input).await;
+    Ok(())
+}
+
+async fn enqueue(
+    call: &mut songbird::Call,
+    session: &mut Session,
+    http: &Arc<Http>,
+    channel: ChannelId,
+    title: String,
+    input: Input,
+) {
+    let mut audio = songbird::tracks::Track::from(input);
+    let announced = Arc::new(AtomicBool::new(false));
+    audio.events.add_event(
+        songbird::events::EventData::new(
+            songbird::Event::Track(songbird::TrackEvent::Play),
+            NowPlaying {
+                http: http.clone(),
+                channel,
+                title: short(&title, 150),
+                announced: announced.clone(),
+            },
+        ),
+        Duration::ZERO,
+    );
+    audio.events.add_event(
+        songbird::events::EventData::new(
+            songbird::Event::Track(songbird::TrackEvent::Error),
+            PlaybackError {
+                http: http.clone(),
+                channel,
+                title: short(&title, 150),
+            },
+        ),
+        Duration::ZERO,
+    );
+    let handle = call.enqueue(audio).await;
+    let id = handle.uuid().to_string();
+    session.titles.insert(id.clone(), title);
+    session.announcements.insert(id, announced);
 }
 
 fn parse_audio_url(value: &str) -> Result<reqwest::Url> {

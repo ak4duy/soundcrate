@@ -21,6 +21,7 @@ struct Session {
     announcements: HashMap<String, Arc<AtomicBool>>,
     idle_since: Option<Instant>,
     shuffle_all: bool,
+    autoplay_channel: Option<ChannelId>,
 }
 
 struct Handler {
@@ -103,7 +104,7 @@ async fn main() -> Result<()> {
     }
     let sessions = Arc::new(Mutex::new(HashMap::new()));
     let handler = Handler {
-        library,
+        library: library.clone(),
         sessions: sessions.clone(),
         guild_id: guild_id.map(GuildId::new),
         about: About::new()?,
@@ -115,6 +116,7 @@ async fn main() -> Result<()> {
         .register_songbird_with(manager.clone())
         .await?;
     let idle_manager = manager.clone();
+    let http = client.http.clone();
     let idle_task = tokio::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_secs(5));
         loop {
@@ -128,9 +130,26 @@ async fn main() -> Result<()> {
             for (guild, session) in entries {
                 let mut session = session.lock().await;
                 let Some(call) = idle_manager.get(guild) else {
+                    session.autoplay_channel = None;
                     continue;
                 };
                 let mut call = call.lock().await;
+                if call.current_channel().is_none() {
+                    session.autoplay_channel = None;
+                }
+                if let Err(error) =
+                    commands::autoplay_next(&library, &mut call, &mut session, &http).await
+                {
+                    warn!(%error, %guild, "Autoplay disabled: could not queue a track");
+                    if let Some(channel) = session.autoplay_channel.take() {
+                        let message = CreateMessage::new()
+                            .content(format!("Autoplay turned off: {error}"))
+                            .allowed_mentions(CreateAllowedMentions::new());
+                        if let Err(error) = channel.send_message(&http, message).await {
+                            warn!(%error, "Could not report autoplay failure");
+                        }
+                    }
+                }
                 let queue = call.queue().current_queue();
                 session
                     .titles

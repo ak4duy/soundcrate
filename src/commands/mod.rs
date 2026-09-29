@@ -8,6 +8,7 @@ mod voice;
 
 pub(super) use about::About;
 pub(super) use library::Library;
+pub(super) use play::autoplay_next;
 
 use anyhow::{Context as _, Result, bail};
 use serenity::all::*;
@@ -33,6 +34,19 @@ pub(super) fn definitions() -> Vec<CreateCommand> {
         CreateCommand::new("playrandom")
             .description("Play or queue one random track from the library")
             .dm_permission(false),
+        CreateCommand::new("autoplay")
+            .description("Play random library tracks when the queue runs out")
+            .dm_permission(false)
+            .add_option(
+                CreateCommandOption::new(
+                    CommandOptionType::String,
+                    "mode",
+                    "Turn autoplay on or off",
+                )
+                .required(true)
+                .add_string_choice("on", "on")
+                .add_string_choice("off", "off"),
+            ),
         CreateCommand::new("play")
             .description("Play or queue a track from the local library")
             .dm_permission(false)
@@ -159,7 +173,10 @@ pub(super) async fn execute(
             bail!("Join my voice channel to control playback.");
         }
     }
-    let content = if matches!(name, "play" | "playalbum" | "playrandom" | "playurl") {
+    let content = if matches!(
+        name,
+        "play" | "playalbum" | "playrandom" | "playurl" | "autoplay"
+    ) {
         play::execute(
             handler,
             ctx,

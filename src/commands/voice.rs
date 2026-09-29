@@ -63,6 +63,7 @@ pub(super) async fn execute(
             Ok("Skipped.".into())
         }
         "stop" => {
+            session.autoplay_channel = None;
             call.queue().stop();
             session.titles.clear();
             session.announcements.clear();
