@@ -1,10 +1,10 @@
 use std::sync::atomic::Ordering;
 
-use anyhow::{Context as _, Result, bail};
+use anyhow::{Context as _, Ok, Result, bail};
 use serenity::all::*;
 use songbird::Call;
 
-use crate::Session;
+use crate::{Session, commands::shuffle};
 
 use super::play::send_now_playing;
 
@@ -14,8 +14,21 @@ pub(super) async fn execute(
     ctx: &Context,
     channel: ChannelId,
     name: &str,
+    mode: Option<&str>,
 ) -> Result<String> {
     match name {
+        "shuffle" => match mode {
+            Some("all") => {
+                session.shuffle_all = true;
+                shuffle::shuffle_upcoming(call.queue());
+                Ok("Shuffle: all".into())
+            }
+            Some("off") => {
+                session.shuffle_all = false;
+                Ok("Shuffle: off".into())
+            }
+            _ => bail!("Choose a shuffle mode"),
+        },
         "pause" => {
             call.queue()
                 .current()

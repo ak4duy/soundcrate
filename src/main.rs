@@ -20,6 +20,7 @@ struct Session {
     titles: HashMap<String, String>,
     announcements: HashMap<String, Arc<AtomicBool>>,
     idle_since: Option<Instant>,
+    shuffle_all: bool,
 }
 
 struct Handler {

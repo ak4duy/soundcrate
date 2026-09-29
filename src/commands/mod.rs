@@ -3,6 +3,7 @@ mod about;
 mod library;
 mod play;
 mod queue;
+mod shuffle;
 mod voice;
 
 pub(super) use about::About;
@@ -55,6 +56,15 @@ pub(super) fn definitions() -> Vec<CreateCommand> {
                 )
                 .required(true),
             ),
+        CreateCommand::new("shuffle")
+            .description("Turn queue shuffle on or off")
+            .dm_permission(false)
+            .add_option(
+                CreateCommandOption::new(CommandOptionType::String, "mode", "Shuffle mode")
+                    .required(true)
+                    .add_string_choice("all", "all")
+                    .add_string_choice("off", "off"),
+            ),
         CreateCommand::new("clear")
             .description("Clear track by index")
             .dm_permission(false)
@@ -77,7 +87,7 @@ pub(super) fn definitions() -> Vec<CreateCommand> {
         ("resume", "Resume playback"),
         ("skip", "Skip the current track"),
         ("queue", "Show the current track and queue"),
-        ("stop", "Clear the queue and disconnect"),
+        ("stop", "Clear the queue"),
     ] {
         commands.push(
             CreateCommand::new(name)
@@ -168,7 +178,13 @@ pub(super) async fn execute(
         if name == "clear" {
             queue::clear_track(call.queue(), &mut session, query)?
         } else {
-            voice::execute(&call, &mut session, ctx, cmd.channel_id, name).await?
+            let mode = cmd
+                .data
+                .options
+                .iter()
+                .find(|option| option.name == "mode")
+                .and_then(|option| option.value.as_str());
+            voice::execute(&call, &mut session, ctx, cmd.channel_id, name, mode).await?
         }
     };
     Ok((content, vec![]))

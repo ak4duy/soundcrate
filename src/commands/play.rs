@@ -7,13 +7,14 @@ use std::{
 };
 
 use anyhow::{Context as _, Result, bail};
+use rand::seq::SliceRandom;
 use serenity::{all::*, async_trait};
 use songbird::input::{File, HttpRequest, Input};
 use tracing::{error, warn};
 
 use crate::{Handler, Session};
 
-use super::short;
+use super::{short, shuffle::shuffle_upcoming};
 
 pub(super) async fn execute(
     handler: &Handler,
@@ -94,6 +95,12 @@ pub(super) async fn execute(
     call.deafen(true).await?;
     check_queue_capacity(call.queue().len(), count)?;
     let position = call.queue().len() + 1;
+    let queue_empty = call.queue().is_empty();
+
+    if session.shuffle_all && queue_empty {
+        prepared.shuffle(&mut rand::rng());
+    }
+
     for (title, input) in prepared {
         let mut audio = songbird::tracks::Track::from(input);
         let announced = Arc::new(AtomicBool::new(false));
@@ -124,6 +131,9 @@ pub(super) async fn execute(
         let id = handle.uuid().to_string();
         session.titles.insert(id.clone(), title);
         session.announcements.insert(id, announced);
+    }
+    if session.shuffle_all && !queue_empty {
+        shuffle_upcoming(call.queue());
     }
     session.idle_since = None;
     if name == "playalbum" {
