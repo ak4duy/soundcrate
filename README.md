@@ -38,6 +38,7 @@ The app image is published to `ghcr.io/ak4duy/soundcrate`:
 | `/stop`                       | Clear the queue and disconnect                                                              |
 | `/seek`                       | Seek to a position in the current track                                                     |
 | `/about`                      | Show Soundcrate version, build details, and update status                                   |
+| `/help`                       | Show all commands and their descriptions                                                    |
 | `/playlist create name`       | Create an empty server playlist                                                             |
 | `/playlist add name track`    | Append a local-library track                                                                |
 | `/playlist remove name track` | Remove a saved track, even if its file is missing                                           |
