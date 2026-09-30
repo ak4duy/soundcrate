@@ -21,28 +21,29 @@ The app image is published to `ghcr.io/ak4duy/soundcrate`:
 
 ## Commands
 
-| Command            | Behavior                                                                                    |
-| ------------------ | ------------------------------------------------------------------------------------------- |
-| `/play track`      | Search local files, join your channel, and enqueue the selected track                       |
-| `/playurl url`     | Play or queue audio from a direct HTTP(S) URL                                               |
-| `/playalbum album` | Search tagged albums and queue all their tracks in disc/track order                         |
-| `/playrandom`      | Play or queue one random library track                                                      |
-| `/autoplay on/off` | Enable or disable random library playback when the queue runs out                           |
-| `/library`         | Show indexed track and album counts, total audio size, album-tag coverage, and file formats |
-| `/queue`           | Browse the current queue                                                                    |
-| `/pause`           | Pause the current track                                                                     |
-| `/resume`          | Resume playback                                                                             |
-| `/shufflee`        | Shuffle tracks                                                                              |
-| `/skip`            | Skip the current track                                                                      |
-| `/clear track`     | Remove one queued track by its `/queue` index or autocomplete selection                     |
-| `/stop`            | Clear the queue and disconnect                                                              |
-| `/about`           | Show Soundcrate version, build details, and update status                                   |
-| `/playlist create name` | Create an empty server playlist |
-| `/playlist add name track` | Append a local-library track |
-| `/playlist remove name track` | Remove a saved track, even if its file is missing |
-| `/playlist play name` | Play or enqueue all saved tracks in order |
-| `/playlist show name` | Show saved track paths and count |
-| `/playlist delete name` | Delete the saved playlist (does not affect queued tracks) |
+| Command                       | Behavior                                                                                    |
+| ----------------------------- | ------------------------------------------------------------------------------------------- |
+| `/play track`                 | Search local files, join your channel, and enqueue the selected track                       |
+| `/playurl url`                | Play or queue audio from a direct HTTP(S) URL                                               |
+| `/playalbum album`            | Search tagged albums and queue all their tracks in disc/track order                         |
+| `/playrandom`                 | Play or queue one random library track                                                      |
+| `/autoplay on/off`            | Enable or disable random library playback when the queue runs out                           |
+| `/library`                    | Show indexed track and album counts, total audio size, album-tag coverage, and file formats |
+| `/queue`                      | Browse the current queue                                                                    |
+| `/pause`                      | Pause the current track                                                                     |
+| `/resume`                     | Resume playback                                                                             |
+| `/shufflee`                   | Shuffle tracks                                                                              |
+| `/skip`                       | Skip the current track                                                                      |
+| `/clear track`                | Remove one queued track by its `/queue` index or autocomplete selection                     |
+| `/stop`                       | Clear the queue and disconnect                                                              |
+| `/seek`                       | Seek to a position in the current track                                                     |
+| `/about`                      | Show Soundcrate version, build details, and update status                                   |
+| `/playlist create name`       | Create an empty server playlist                                                             |
+| `/playlist add name track`    | Append a local-library track                                                                |
+| `/playlist remove name track` | Remove a saved track, even if its file is missing                                           |
+| `/playlist play name`         | Play or enqueue all saved tracks in order                                                   |
+| `/playlist show name`         | Show saved track paths and count                                                            |
+| `/playlist delete name`       | Delete the saved playlist (does not affect queued tracks)                                   |
 
 Check that the mount is readable and inspect the indexed filenames:
 
