@@ -26,6 +26,7 @@ struct Session {
 
 struct Handler {
     library: Arc<Library>,
+    playlists: Arc<Mutex<commands::Playlists>>,
     sessions: Arc<Mutex<HashMap<GuildId, Arc<Mutex<Session>>>>>,
     guild_id: Option<GuildId>,
     about: About,
@@ -105,6 +106,9 @@ async fn main() -> Result<()> {
     let sessions = Arc::new(Mutex::new(HashMap::new()));
     let handler = Handler {
         library: library.clone(),
+        playlists: Arc::new(Mutex::new(commands::Playlists::open(Path::new(
+            &env::var("PLAYLIST_DIR").unwrap_or_else(|_| "./data".into()),
+        ))?)),
         sessions: sessions.clone(),
         guild_id: guild_id.map(GuildId::new),
         about: About::new()?,

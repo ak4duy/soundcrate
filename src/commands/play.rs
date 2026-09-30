@@ -84,6 +84,7 @@ pub(super) async fn execute(
         (url_label(url), vec![])
     } else {
         match name {
+            "playlist" => super::playlist::tracks(handler, cmd).await?,
             "playalbum" => handler
                 .library
                 .resolve_album(query.context("Choose an album.")?)?,
@@ -136,9 +137,14 @@ pub(super) async fn execute(
         shuffle_upcoming(call.queue());
     }
     session.idle_since = None;
-    if name == "playalbum" {
+    if name == "playalbum" || name == "playlist" {
+        let kind = if name == "playlist" {
+            "playlist"
+        } else {
+            "album"
+        };
         return Ok(format!(
-            "{} album **{}** — {count} tracks ({position}).",
+            "{} {kind} **{}** — {count} tracks ({position}).",
             if position == 1 { "Playing" } else { "Queued" },
             short(&label, 150)
         ));

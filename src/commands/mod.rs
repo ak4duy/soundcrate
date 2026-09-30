@@ -2,6 +2,7 @@ mod about;
 
 mod library;
 mod play;
+mod playlist;
 mod queue;
 mod shuffle;
 mod voice;
@@ -9,6 +10,7 @@ mod voice;
 pub(super) use about::About;
 pub(super) use library::Library;
 pub(super) use play::autoplay_next;
+pub(super) use playlist::Playlists;
 
 use anyhow::{Context as _, Result, bail};
 use serenity::all::*;
@@ -17,6 +19,7 @@ use crate::Handler;
 
 pub(super) fn definitions() -> Vec<CreateCommand> {
     let mut commands = vec![
+        playlist::definition(),
         CreateCommand::new("about")
             .description("Show Soundcrate version, build details, and update status"),
         CreateCommand::new("playalbum")
@@ -115,7 +118,9 @@ pub(super) fn definitions() -> Vec<CreateCommand> {
 pub(super) async fn autocomplete(handler: &Handler, ctx: &Context, cmd: &CommandInteraction) {
     let query = cmd.data.autocomplete().map(|a| a.value).unwrap_or("");
     let mut response = CreateAutocompleteResponse::new();
-    if cmd.data.name == "playalbum" {
+    if cmd.data.name == "playlist" {
+        response = playlist::autocomplete(handler, cmd).await;
+    } else if cmd.data.name == "playalbum" {
         for (id, label) in handler.library.search_albums(query, 25) {
             response = response.add_string_choice(short(&label, 100), format!("album:{id}"));
         }
@@ -145,6 +150,9 @@ pub(super) async fn execute(
 ) -> Result<(String, Vec<CreateActionRow>)> {
     let guild = cmd.guild_id.context("Use this command in a server.")?;
     let name = cmd.data.name.as_str();
+    if name == "playlist" && playlist::subcommand(cmd)? != "play" {
+        return Ok((playlist::manage(handler, cmd).await?, vec![]));
+    }
     if name == "queue" {
         return queue_page(handler, ctx, guild, 0).await;
     }
@@ -175,7 +183,7 @@ pub(super) async fn execute(
     }
     let content = if matches!(
         name,
-        "play" | "playalbum" | "playrandom" | "playurl" | "autoplay"
+        "play" | "playalbum" | "playrandom" | "playurl" | "autoplay" | "playlist"
     ) {
         play::execute(
             handler,
@@ -213,11 +221,18 @@ pub(super) async fn respond(handler: &Handler, ctx: &Context, cmd: &CommandInter
         return;
     }
     let response = match cmd.data.name.as_str() {
-        "about" => Some(about::response(&handler.about).await),
-        "library" if cmd.guild_id.is_some() => Some(library::response(&handler.library)),
+        "about" => Some(Ok(about::response(&handler.about).await)),
+        "library" if cmd.guild_id.is_some() => Some(Ok(library::response(&handler.library))),
+        "playlist" if playlist::subcommand(cmd).ok() == Some("show") => {
+            Some(playlist::show(handler, cmd).await)
+        }
         _ => None,
     };
     if let Some(response) = response {
+        let response = response.unwrap_or_else(|error| {
+            tracing::warn!(%error, command = %cmd.data.name, "Command failed");
+            message_response(format!("{error}"), vec![])
+        });
         if let Err(error) = cmd.edit_response(&ctx.http, response).await {
             tracing::warn!(%error, command = %cmd.data.name, "Command response failed");
         }
@@ -231,14 +246,7 @@ pub(super) async fn respond(handler: &Handler, ctx: &Context, cmd: &CommandInter
         }
     };
     if let Err(error) = cmd
-        .edit_response(
-            &ctx.http,
-            EditInteractionResponse::new()
-                .content("")
-                .embed(CreateEmbed::new().description(content).color(0x4BFF9A))
-                .components(components)
-                .allowed_mentions(CreateAllowedMentions::new()),
-        )
+        .edit_response(&ctx.http, message_response(content, components))
         .await
     {
         tracing::warn!(%error, "Command response failed");
@@ -246,11 +254,12 @@ pub(super) async fn respond(handler: &Handler, ctx: &Context, cmd: &CommandInter
 }
 
 pub(super) async fn component(handler: &Handler, ctx: &Context, component: &ComponentInteraction) {
-    let Some(page) = component
+    let Some((kind, page)) = component
         .data
         .custom_id
-        .strip_prefix("queue:")
-        .and_then(|value| value.parse::<usize>().ok())
+        .split_once(':')
+        .filter(|(kind, _)| matches!(*kind, "queue" | "playlist"))
+        .and_then(|(kind, value)| value.parse::<usize>().ok().map(|page| (kind, page)))
     else {
         return;
     };
@@ -261,29 +270,43 @@ pub(super) async fn component(handler: &Handler, ctx: &Context, component: &Comp
         .create_response(&ctx.http, CreateInteractionResponse::Acknowledge)
         .await
     {
-        tracing::warn!(%error, "Could not defer queue page update");
+        tracing::warn!(%error, "Could not defer page update");
         return;
     }
-    let (content, components) = match queue_page(handler, ctx, guild, page).await {
-        Ok(page) => page,
-        Err(error) => {
-            tracing::warn!(%error, "Queue page update failed");
-            (format!("{error}"), vec![])
+    let result = if kind == "playlist" {
+        // Our message's title holds the exact name, keeping button IDs short
+        // even for playlist names containing Unicode or colons.
+        match component
+            .message
+            .embeds
+            .first()
+            .and_then(|embed| embed.title.as_deref())
+        {
+            Some(name) => playlist::page(handler, guild, name, page).await,
+            None => Err(anyhow::anyhow!(
+                "Use /playlist show again to browse this playlist."
+            )),
         }
+    } else {
+        queue_page(handler, ctx, guild, page)
+            .await
+            .map(|(content, components)| message_response(content, components))
     };
-    if let Err(error) = component
-        .edit_response(
-            &ctx.http,
-            EditInteractionResponse::new()
-                .content("")
-                .embed(CreateEmbed::new().description(content).color(0x4BFF9A))
-                .components(components)
-                .allowed_mentions(CreateAllowedMentions::new()),
-        )
-        .await
-    {
-        tracing::warn!(%error, "Could not edit queue page");
+    let response = result.unwrap_or_else(|error| {
+        tracing::warn!(%error, "Page update failed");
+        message_response(format!("{error}"), vec![])
+    });
+    if let Err(error) = component.edit_response(&ctx.http, response).await {
+        tracing::warn!(%error, "Could not edit page");
     }
+}
+
+fn message_response(content: String, components: Vec<CreateActionRow>) -> EditInteractionResponse {
+    EditInteractionResponse::new()
+        .content("")
+        .embed(CreateEmbed::new().description(content).color(0x4BFF9A))
+        .components(components)
+        .allowed_mentions(CreateAllowedMentions::new())
 }
 
 pub(super) async fn queue_page(
