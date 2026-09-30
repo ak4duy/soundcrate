@@ -1,5 +1,6 @@
 mod about;
 
+mod help;
 mod library;
 mod play;
 mod playlist;
@@ -20,6 +21,7 @@ use crate::Handler;
 
 pub(super) fn definitions() -> Vec<CreateCommand> {
     let mut commands = vec![
+        CreateCommand::new("help").description("Show all commands and their descriptions"),
         CreateCommand::new("seek")
             .description("Seek to a position in the current track")
             .dm_permission(false)
@@ -227,8 +229,6 @@ pub(super) async fn execute(
             let seconds = u64::try_from(seconds).context("Position must not be negative")?;
 
             seek::execute(&call, seconds).await?
-            
-            
         } else {
             let mode = cmd
                 .data
@@ -248,6 +248,7 @@ pub(super) async fn respond(handler: &Handler, ctx: &Context, cmd: &CommandInter
         return;
     }
     let response = match cmd.data.name.as_str() {
+        "help" => Some(help::response(handler).await),
         "about" => Some(Ok(about::response(&handler.about).await)),
         "library" if cmd.guild_id.is_some() => Some(Ok(library::response(&handler.library))),
         "playlist" if playlist::subcommand(cmd).ok() == Some("show") => {

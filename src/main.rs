@@ -30,6 +30,7 @@ struct Handler {
     sessions: Arc<Mutex<HashMap<GuildId, Arc<Mutex<Session>>>>>,
     guild_id: Option<GuildId>,
     about: About,
+    help_commands: Mutex<Vec<Command>>,
 }
 
 impl Handler {
@@ -46,8 +47,17 @@ impl EventHandler for Handler {
             None => Command::set_global_commands(&ctx.http, commands::definitions()).await,
         };
         match result {
-            Ok(_) => {
-                info!(user = %ready.user.name, tracks = self.library.tracks.len(), "Soundcrate is ready")
+            Ok(mut commands) => {
+                commands.retain(|command| command.kind == CommandType::ChatInput);
+                commands.sort_by(|a, b| a.name.cmp(&b.name));
+
+                *self.help_commands.lock().await = commands;
+
+                info!(
+                    user = %ready.user.name,
+                    tracks = self.library.tracks.len(),
+                    "Soundcrate is ready"
+                );
             }
             Err(error) => error!(%error, "Could not register slash commands"),
         }
@@ -112,6 +122,7 @@ async fn main() -> Result<()> {
         sessions: sessions.clone(),
         guild_id: guild_id.map(GuildId::new),
         about: About::new()?,
+        help_commands: Mutex::new(Vec::new()),
     };
     let intents = GatewayIntents::GUILDS | GatewayIntents::GUILD_VOICE_STATES;
     let manager = songbird::Songbird::serenity();
