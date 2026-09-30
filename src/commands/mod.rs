@@ -4,6 +4,7 @@ mod library;
 mod play;
 mod playlist;
 mod queue;
+mod seek;
 mod shuffle;
 mod voice;
 
@@ -19,6 +20,18 @@ use crate::Handler;
 
 pub(super) fn definitions() -> Vec<CreateCommand> {
     let mut commands = vec![
+        CreateCommand::new("seek")
+            .description("Seek to a position in the current track")
+            .dm_permission(false)
+            .add_option(
+                CreateCommandOption::new(
+                    CommandOptionType::Integer,
+                    "seconds",
+                    "Position from the start of the track, in seconds",
+                )
+                .required(true)
+                .min_int_value(0),
+            ),
         playlist::definition(),
         CreateCommand::new("about")
             .description("Show Soundcrate version, build details, and update status"),
@@ -202,6 +215,20 @@ pub(super) async fn execute(
         let call = call.lock().await;
         if name == "clear" {
             queue::clear_track(call.queue(), &mut session, query)?
+        } else if name == "seek" {
+            let seconds = cmd
+                .data
+                .options
+                .iter()
+                .find(|option| option.name == "seconds")
+                .and_then(|option| option.value.as_i64())
+                .context("Enter a position in seconds")?;
+
+            let seconds = u64::try_from(seconds).context("Position must not be negative")?;
+
+            seek::execute(&call, seconds).await?
+            
+            
         } else {
             let mode = cmd
                 .data
@@ -274,8 +301,6 @@ pub(super) async fn component(handler: &Handler, ctx: &Context, component: &Comp
         return;
     }
     let result = if kind == "playlist" {
-        // Our message's title holds the exact name, keeping button IDs short
-        // even for playlist names containing Unicode or colons.
         match component
             .message
             .embeds
