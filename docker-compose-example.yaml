@@ -8,11 +8,13 @@ services:
       # Your Discord bot token
       DISCORD_TOKEN: 'REPLACE_WITH_YOUR_BOT_TOKEN'
       MUSIC_DIR: /music
+      PLAYLIST_DIR: /data
       # Optional server ID for immediate command registration, empty means global.
       GUILD_ID: ''
       IDLE_TIMEOUT_SECONDS: '300'
       RUST_LOG: soundcrate=info,songbird=warn,serenity=warn
     volumes:
+      - playlist-data:/data
       - type: bind
         # Absolute path to your music folder on the host.
         source: /absolute/path/to/music
@@ -28,3 +30,6 @@ services:
     security_opt:
       - no-new-privileges:true
     stop_grace_period: 20s
+
+volumes:
+  playlist-data:

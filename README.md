@@ -11,7 +11,7 @@ The app image is published to `ghcr.io/ak4duy/soundcrate`:
 
 1. Create an application and bot in the [Discord Developer Portal](https://discord.com/developers/applications), then copy its bot token.
 2. Invite it to your server using the `bot`. Grant **View Channels**, **Connect**, **Speak**, **Send Messages**, **Embed Links** and **Message Content Intent**.
-3. Save `docker-compose.yaml` in your deployment directory. Edit `environment.DISCORD_TOKEN` with your bot token and `volumes[0].source` with the **absolute host path** containing your music.
+3. Copy `docker-compose-example.yaml` to `docker-compose.yaml` in your deployment directory. Supply your bot token in that local file (never commit it), and set the music bind mount's `source` to the **absolute host path** containing your music.
 4. Start the bot:
 
    ```sh
@@ -21,20 +21,30 @@ The app image is published to `ghcr.io/ak4duy/soundcrate`:
 
 ## Commands
 
-| Command            | Behavior                                                                                    |
-| ------------------ | ------------------------------------------------------------------------------------------- |
-| `/play track`      | Search local files, join your channel, and enqueue the selected track                       |
-| `/playurl url`     | Play or queue audio from a direct HTTP(S) URL                                               |
-| `/playalbum album` | Search tagged albums and queue all their tracks in disc/track order                         |
-| `/playrandom`      | Play or queue one random library track                                                      |
-| `/library`         | Show indexed track and album counts, total audio size, album-tag coverage, and file formats |
-| `/queue`           | Browse the current queue                                                                    |
-| `/pause`           | Pause the current track                                                                     |
-| `/resume`          | Resume playback                                                                             |
-| `/skip`            | Skip the current track                                                                      |
-| `/clear track`     | Remove one queued track by its `/queue` index or autocomplete selection                     |
-| `/stop`            | Clear the queue and disconnect                                                              |
-| `/about`           | Show Soundcrate version, build details, and update status                                   |
+| Command                       | Behavior                                                                                    |
+| ----------------------------- | ------------------------------------------------------------------------------------------- |
+| `/play track`                 | Search local files, join your channel, and enqueue the selected track                       |
+| `/playurl url`                | Play or queue audio from a direct HTTP(S) URL                                               |
+| `/playalbum album`            | Search tagged albums and queue all their tracks in disc/track order                         |
+| `/playrandom`                 | Play or queue one random library track                                                      |
+| `/autoplay on/off`            | Enable or disable random library playback when the queue runs out                           |
+| `/library`                    | Show indexed track and album counts, total audio size, album-tag coverage, and file formats |
+| `/queue`                      | Browse the current queue                                                                    |
+| `/pause`                      | Pause the current track                                                                     |
+| `/resume`                     | Resume playback                                                                             |
+| `/shufflee`                   | Shuffle tracks                                                                              |
+| `/skip`                       | Skip the current track                                                                      |
+| `/clear track`                | Remove one queued track by its `/queue` index or autocomplete selection                     |
+| `/stop`                       | Clear the queue and disconnect                                                              |
+| `/seek`                       | Seek to a position in the current track                                                     |
+| `/about`                      | Show Soundcrate version, build details, and update status                                   |
+| `/help`                       | Show all commands and their descriptions                                                    |
+| `/playlist create name`       | Create an empty server playlist                                                             |
+| `/playlist add name track`    | Append a local-library track                                                                |
+| `/playlist remove name track` | Remove a saved track, even if its file is missing                                           |
+| `/playlist play name`         | Play or enqueue all saved tracks in order                                                   |
+| `/playlist show name`         | Show saved track paths and count                                                            |
+| `/playlist delete name`       | Delete the saved playlist (does not affect queued tracks)                                   |
 
 Check that the mount is readable and inspect the indexed filenames:
 
@@ -65,7 +75,7 @@ When running the Rust executable directly, pass configuration through environmen
 
 ```sh
 MUSIC_DIR=/path/to/music cargo run -- --check-library
-DISCORD_TOKEN=your_token MUSIC_DIR=/path/to/music GUILD_ID=your_server_id cargo run
+DISCORD_TOKEN=your_token MUSIC_DIR=/path/to/music PLAYLIST_DIR=/path/to/bot-data GUILD_ID=your_server_id cargo run
 ```
 
 Validation:
@@ -82,6 +92,7 @@ docker build -t soundcrate .
 - `src/main.rs`: Discord event dispatch, shared session state, idle cleanup, shutdown.
 - `src/commands/mod.rs`: slash-command registration, autocomplete, dispatch, and responses.
 - `src/commands/play.rs`: playback commands, now-playing and error announcements.
+- `src/commands/playlist.rs`: server playlists, stable track references, and durable JSON storage.
 - `src/commands/queue.rs`: paginated queue and track removal.
 - `src/commands/voice.rs`: playback controls.
 - `src/commands/about.rs`: `/about` response and build update checks.

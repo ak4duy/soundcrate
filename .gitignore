@@ -2,3 +2,4 @@
 /.env
 docker-compose.yaml
 /music/
+/data/

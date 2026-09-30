@@ -160,19 +160,22 @@ fn render_queue_page(titles: &[String], requested_page: usize) -> (String, Vec<C
             if index == 0 { " (current)" } else { "" },
         ));
     }
-    let buttons = CreateActionRow::Buttons(vec![
-        CreateButton::new(format!("queue:{}", page.saturating_sub(1)))
+    (lines.join("\n"), vec![page_buttons("queue", page, pages)])
+}
+
+pub(super) fn page_buttons(prefix: &str, page: usize, pages: usize) -> CreateActionRow {
+    CreateActionRow::Buttons(vec![
+        CreateButton::new(format!("{prefix}:{}", page.saturating_sub(1)))
             .label("◄")
             .style(ButtonStyle::Secondary)
             .disabled(page == 0),
-        CreateButton::new("queue:page")
+        CreateButton::new(format!("{prefix}:page"))
             .label(format!("{} / {pages}", page + 1))
             .style(ButtonStyle::Secondary)
             .disabled(true),
-        CreateButton::new(format!("queue:{}", page + 1))
+        CreateButton::new(format!("{prefix}:{}", page + 1))
             .label("►")
             .style(ButtonStyle::Secondary)
             .disabled(page + 1 == pages),
-    ]);
-    (lines.join("\n"), vec![buttons])
+    ])
 }

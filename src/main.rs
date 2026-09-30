@@ -20,13 +20,17 @@ struct Session {
     titles: HashMap<String, String>,
     announcements: HashMap<String, Arc<AtomicBool>>,
     idle_since: Option<Instant>,
+    shuffle_all: bool,
+    autoplay_channel: Option<ChannelId>,
 }
 
 struct Handler {
     library: Arc<Library>,
+    playlists: Arc<Mutex<commands::Playlists>>,
     sessions: Arc<Mutex<HashMap<GuildId, Arc<Mutex<Session>>>>>,
     guild_id: Option<GuildId>,
     about: About,
+    help_commands: Mutex<Vec<Command>>,
 }
 
 impl Handler {
@@ -43,8 +47,17 @@ impl EventHandler for Handler {
             None => Command::set_global_commands(&ctx.http, commands::definitions()).await,
         };
         match result {
-            Ok(_) => {
-                info!(user = %ready.user.name, tracks = self.library.tracks.len(), "Soundcrate is ready")
+            Ok(mut commands) => {
+                commands.retain(|command| command.kind == CommandType::ChatInput);
+                commands.sort_by(|a, b| a.name.cmp(&b.name));
+
+                *self.help_commands.lock().await = commands;
+
+                info!(
+                    user = %ready.user.name,
+                    tracks = self.library.tracks.len(),
+                    "Soundcrate is ready"
+                );
             }
             Err(error) => error!(%error, "Could not register slash commands"),
         }
@@ -102,10 +115,14 @@ async fn main() -> Result<()> {
     }
     let sessions = Arc::new(Mutex::new(HashMap::new()));
     let handler = Handler {
-        library,
+        library: library.clone(),
+        playlists: Arc::new(Mutex::new(commands::Playlists::open(Path::new(
+            &env::var("PLAYLIST_DIR").unwrap_or_else(|_| "./data".into()),
+        ))?)),
         sessions: sessions.clone(),
         guild_id: guild_id.map(GuildId::new),
         about: About::new()?,
+        help_commands: Mutex::new(Vec::new()),
     };
     let intents = GatewayIntents::GUILDS | GatewayIntents::GUILD_VOICE_STATES;
     let manager = songbird::Songbird::serenity();
@@ -114,6 +131,7 @@ async fn main() -> Result<()> {
         .register_songbird_with(manager.clone())
         .await?;
     let idle_manager = manager.clone();
+    let http = client.http.clone();
     let idle_task = tokio::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_secs(5));
         loop {
@@ -127,9 +145,26 @@ async fn main() -> Result<()> {
             for (guild, session) in entries {
                 let mut session = session.lock().await;
                 let Some(call) = idle_manager.get(guild) else {
+                    session.autoplay_channel = None;
                     continue;
                 };
                 let mut call = call.lock().await;
+                if call.current_channel().is_none() {
+                    session.autoplay_channel = None;
+                }
+                if let Err(error) =
+                    commands::autoplay_next(&library, &mut call, &mut session, &http).await
+                {
+                    warn!(%error, %guild, "Autoplay disabled: could not queue a track");
+                    if let Some(channel) = session.autoplay_channel.take() {
+                        let message = CreateMessage::new()
+                            .content(format!("Autoplay turned off: {error}"))
+                            .allowed_mentions(CreateAllowedMentions::new());
+                        if let Err(error) = channel.send_message(&http, message).await {
+                            warn!(%error, "Could not report autoplay failure");
+                        }
+                    }
+                }
                 let queue = call.queue().current_queue();
                 session
                     .titles
